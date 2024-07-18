@@ -1,0 +1,5 @@
+Defaults:nrpe !requiretty
+
+# Below chage command is required by check_passwd_expiry, chage -l * only grants read access
+nrpe ALL=(ALL) NOPASSWD:/usr/bin/chage -l * 
+nrpe ALL=(ALL) NOPASSWD:/usr/local/lib64/nagios/plugins/check_passwd_expiry
