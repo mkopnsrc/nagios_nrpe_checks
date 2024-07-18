@@ -1,0 +1,77 @@
+#!/bin/bash
+
+: <<'#HEADER_COMMENTS'
+ScriptName: check_postfix_queue
+Created: 2010-07-19
+Updated: 2010-07-19
+Version: 20100719
+Author: Mahesh Kakadia
+ProjectUrl: https://github.com/mkopnsrc/nagios_nrpe_checks
+Description: This script checks the size of the Postfix mail queue and returns an appropriate status code for NRPE monitoring. 
+             It outputs the number of emails in the queue and a performance data string for use in monitoring systems like Nagios.
+Requirements: 
+  - mailq: The script uses the 'mailq' command to get the list of emails in the queue. This command is typically part of the Postfix mail system.
+  - egrep: The script uses 'egrep' to filter the output of 'mailq' for valid queue IDs.
+Supported Platforms: Debian, Ubuntu, RHEL, AlmaLinux
+#HEADER_COMMENTS
+
+# exit codes
+EXIT_OK=0
+EXIT_WARNING=1
+EXIT_CRITICAL=2
+EXIT_UNKNOWN=3
+
+# regular expression that matches queue IDs (e.g. D71EF7AC80F8)
+queue_id='^[A-F0-9]{10}$'
+
+usage="Usage: $0 -w <warning_threshold> -c <critical_threshold>"
+
+# Ensure required commands are available
+for cmd in mailq egrep; do
+    if ! command -v $cmd &> /dev/null; then
+        echo "Error: $cmd is not installed." >&2
+        exit $EXIT_UNKNOWN
+    fi
+done
+
+if [ -z $1 ]; then
+    echo $usage
+    exit $EXIT_UNKNOWN
+fi
+
+# Parse command-line options
+while getopts ":w:c:" options; do
+    case $options in
+        w ) warning=$OPTARG ;;
+        c ) critical=$OPTARG ;;
+        * ) echo $usage
+            exit $EXIT_UNKNOWN ;;
+    esac
+done
+
+# Ensure thresholds are set
+if [ -z "$warning" ] || [ -z "$critical" ]; then
+    echo "Error: Both warning and critical thresholds must be provided."
+    echo $usage
+    exit $EXIT_UNKNOWN
+fi
+
+# Determine queue size
+qsize=$(mailq | egrep -c $queue_id)
+if [ -z "$qsize" ]
+then
+    exit $EXIT_UNKNOWN
+fi
+
+# Determine the appropriate exit code based on queue size
+if [ "$qsize" -ge "$critical" ]; then
+    EXIT_CODE=$EXIT_CRITICAL
+elif [ "$qsize" -ge "$warning" ]; then
+    EXIT_CODE=$EXIT_WARNING
+else
+    EXIT_CODE=$EXIT_OK
+fi
+
+# Output result
+echo "$qsize mail(s) in queue | mail_queue=$qsize"
+exit $EXIT_CODE
