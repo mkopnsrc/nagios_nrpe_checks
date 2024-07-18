@@ -1,65 +1,105 @@
 #!/bin/bash
 
-#Set DEBUG variable to 1, if you want to enable debugging, otherwise keep it set to 0
-DEBUG=0
+: <<'#HEADER_COMMENTS'
+ScriptName: check_postfix_queue
+Created: 2010-07-14
+Updated: 2010-07-19
+Version: 20100719
+Author: Mahesh Kakadia
+ProjectUrl: https://github.com/mkopnsrc/nagios_nrpe_checks
+Description: This script checks the password age and expiry for a specified user and provides status messages
+             according to defined warning and critical thresholds. The script uses the `chage` command to 
+             retrieve password information and calculates the days since the last password change and days
+             until the password expires. It then outputs the appropriate status based on the provided thresholds.
+Requirements:
+    - Bash shell
+    - `chage` command available (usually part of the shadow-utils package)
+    - Sudo privileges to run `chage` command
+    - `date` command supporting `-d` option
+    - /etc/login.defs file containing PASS_MAX_DAYS setting
+
+SupportedPlatforms: Linux distributions with shadow-utils installed (e.g., Debian, Ubuntu, CentOS, Rocky Linux)
+#HEADER_COMMENTS
+
+# exit codes
+EXIT_OK=0
+EXIT_WARNING=1
+EXIT_CRITICAL=2
+EXIT_UNKNOWN=3
+
+#Set DEBUG mode, true to Enable and false to Disable
+DEBUG_MODE="false"
 
 # Function to display usage information
 usage() {
-  echo "Usage: $0 -u <username> -w <warning_days_int> -c <critical_days_int>"
-  exit 1
+    echo "Usage: $0 -u <username> -w <warning_days_int> -c <critical_days_int>"
+    exit $EXIT_UNKNOWN
 }
+
+# Ensure required commands are available
+for cmd in sudo chage; do
+    if ! command -v $cmd &> /dev/null; then
+        echo "Error: $cmd is not installed." >&2
+        exit $EXIT_UNKNOWN
+    fi
+done
+
+# Check if /etc/login.defs file exists
+if [ ! -f /etc/login.defs ]; then
+  echo "Error: /etc/login.defs file not found."
+  exit $EXIT_UNKNOWN
+fi
 
 # Check if the correct number of arguments is provided
 if [ $# -ne 6 ]; then
-  usage
+    usage
 fi
 
 # Parse script arguments
 while [ $# -gt 0 ]; do
-  case "$1" in
-    -u)
-      USER=$2
-      shift 2
-      ;;
-    -w)
-      WARNING=$2
-      shift 2
-      ;;
-    -c)
-      CRITICAL=$2
-      shift 2
-      ;;
-    *)
-      usage
-      ;;
-  esac
+    case "$1" in
+        -u)
+          USER=$2
+          shift 2
+          ;;
+        -w)
+          WARNING=$2
+          shift 2
+          ;;
+        -c)
+          CRITICAL=$2
+          shift 2
+          ;;
+        *)
+          usage
+          ;;
+    esac
 done
 
 # Validate arguments
 if [ -z "$USER" ] || [ -z "$WARNING" ] || [ -z "$CRITICAL" ]; then
-  usage
+    usage
 fi
 
 # Validate that WARNING and CRITICAL are integers
 if ! [[ "$WARNING" =~ ^[0-9]+$ ]] || ! [[ "$CRITICAL" =~ ^[0-9]+$ ]]; then
-  echo "Error: Warning and Critical values must be integers."
-  exit 1
+    echo "Error: Warning and Critical values must be integers."
+    exit $EXIT_UNKNOWN
 fi
 
 # Retrieve PASS_MAX_DAYS from /etc/login.defs
 PASS_MAX_AGE=$(grep -E "^PASS_MAX_DAYS[[:space:]]([0-9]+)" /etc/login.defs | awk '{print $2}')
 
 if [ -z "$PASS_MAX_AGE" ] && ! [[ "$PASS_MAX_AGE" =~ ^[0-9]+$ ]]; then
-  echo "Error: Could not retrieve or doesn't contain integer for PASS_MAX_DAYS from /etc/login.defs"
-  exit 1
+    echo "Error: Could not retrieve or doesn't contain integer for PASS_MAX_DAYS from /etc/login.defs"
+    exit $EXIT_UNKNOWN
 fi
 
-# Initialize variables to store password information
+# Initialize variables to store password status information
 last_changed=""
 expires=""
 account_expires=""
 STATUS=""
-EXIT_CODE=0
 
 # Execute the `chage` command for the specified user
 expiry_output=$(sudo chage -l "$USER")
@@ -72,38 +112,48 @@ account_expires=$(echo "$expiry_output" | grep "Account expires" | awk -F": " '{
 # Convert date strings to timestamps
 current_timestamp=$(date +%s)
 
+# Convert last password changed date format to timestamp
 if [[ $last_changed != "never" ]]; then
-  last_changed_timestamp=$(date -d "$last_changed" +%s)
+    last_changed_timestamp=$(date -d "$last_changed" +%s)
 else
-  last_changed_timestamp=0
+    last_changed_timestamp=0
 fi
-# DEBUG - last_changed_timestamp
-if [ $DEBUG -eq 1 ]; then echo "last_changed_timestamp: $last_changed_timestamp"; fi
 
+# Convert password expiry date format to timestamp
 if [[ $expires != "never" ]]; then
-  expires_timestamp=$(date -d "$expires" +%s)
+    expires_timestamp=$(date -d "$expires" +%s)
 else
-  expires_timestamp=0
+    expires_timestamp=0
 fi
-# DEBUG - expires_timestamp
-if [ $DEBUG -eq 1 ]; then echo "expires_timestamp: $expires_timestamp"; fi
 
-# Calculate the difference in days
+# Calculate the difference from cuurrent  timestamp and last password timestamp in days
 if [[ $last_changed_timestamp != 0 ]]; then
-  days_since_last_changed=$(( (current_timestamp - last_changed_timestamp) / 86400 ))
+    days_since_last_changed=$(( (current_timestamp - last_changed_timestamp) / 86400 ))
 else
-  days_since_last_changed=0
+    days_since_last_changed=0
 fi
-# DEBUG - days_since_last_changed
-if [ $DEBUG -eq 1 ]; then echo "days_since_last_changed: $days_since_last_changed"; fi
 
+# Calculate days remaining until password expires
 if [[ $expires_timestamp != 0 ]]; then
-  days_until_expires=$(( (expires_timestamp - current_timestamp) / 86400 ))
+    days_until_expires=$(( (expires_timestamp - current_timestamp) / 86400 ))
 else
-  days_until_expires=0
+    days_until_expires=0
 fi
-# DEBUG - days_until_expires
-if [ $DEBUG -eq 1 ]; then echo "days_until_expires: $days_until_expires"; fi
+
+# DEBUG MODE
+if [ "$DEBUG_MODE" == "true" ]; then
+    # last_changed_timestamp
+    echo "last_changed_timestamp: $last_changed_timestamp"
+
+    # expires_timestamp
+    echo "expires_timestamp: $expires_timestamp"
+
+    # days_since_last_changed
+    echo "days_since_last_changed: $days_since_last_changed"
+
+    # Days_until_expires
+    echo "days_until_expires: $days_until_expires"
+fi
 
 # Notify messages
 msg_passwd_old="User '$USER' password was changed more than $days_since_last_changed days ago!"
@@ -112,16 +162,16 @@ msg_passwd_remain="$days_until_expires days remain until the '$USER' password ex
 # Conditional checks and notifications
 if [[ $expires != "never" && $days_until_expires -lt $CRITICAL ]]; then
     STATUS="CRITICAL: $msg_passwd_remain"
-    EXIT_CODE=2
+    EXIT_CODE=$EXIT_CRITICAL
 elif [[ $expires != "never" && $days_until_expires -lt $WARNING ]]; then
     STATUS="WARNING: $msg_passwd_remain"
-    EXIT_CODE=1
+    EXIT_CODE=$EXIT_WARNING
 elif [[ $last_changed == "never" || $days_since_last_changed -gt $PASS_MAX_AGE ]]; then
     STATUS="WARNING: $msg_passwd_old"
-    EXIT_CODE=1
+    EXIT_CODE=$EXIT_WARNING
 else
     STATUS="OK: '$USER' user password not near expiry!"
-    EXIT_CODE=0
+    EXIT_CODE=$EXIT_OK
 fi
 
 # Output Monitor messages
