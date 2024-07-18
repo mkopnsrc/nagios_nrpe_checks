@@ -1,0 +1,129 @@
+#!/bin/bash
+
+#Set DEBUG variable to 1, if you want to enable debugging, otherwise keep it set to 0
+DEBUG=0
+
+# Function to display usage information
+usage() {
+  echo "Usage: $0 -u <username> -w <warning_days_int> -c <critical_days_int>"
+  exit 1
+}
+
+# Check if the correct number of arguments is provided
+if [ $# -ne 6 ]; then
+  usage
+fi
+
+# Parse script arguments
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -u)
+      USER=$2
+      shift 2
+      ;;
+    -w)
+      WARNING=$2
+      shift 2
+      ;;
+    -c)
+      CRITICAL=$2
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+# Validate arguments
+if [ -z "$USER" ] || [ -z "$WARNING" ] || [ -z "$CRITICAL" ]; then
+  usage
+fi
+
+# Validate that WARNING and CRITICAL are integers
+if ! [[ "$WARNING" =~ ^[0-9]+$ ]] || ! [[ "$CRITICAL" =~ ^[0-9]+$ ]]; then
+  echo "Error: Warning and Critical values must be integers."
+  exit 1
+fi
+
+# Retrieve PASS_MAX_DAYS from /etc/login.defs
+PASS_MAX_AGE=$(grep -E "^PASS_MAX_DAYS[[:space:]]([0-9]+)" /etc/login.defs | awk '{print $2}')
+
+if [ -z "$PASS_MAX_AGE" ] && ! [[ "$PASS_MAX_AGE" =~ ^[0-9]+$ ]]; then
+  echo "Error: Could not retrieve or doesn't contain integer for PASS_MAX_DAYS from /etc/login.defs"
+  exit 1
+fi
+
+# Initialize variables to store password information
+last_changed=""
+expires=""
+account_expires=""
+STATUS=""
+EXIT_CODE=0
+
+# Execute the `chage` command for the specified user
+expiry_output=$(sudo chage -l "$USER")
+
+# Extract information using grep and awk
+last_changed=$(echo "$expiry_output" | grep "Last password change" | awk -F": " '{print $2}')
+expires=$(echo "$expiry_output" | grep "Password expires" | awk -F": " '{print $2}')
+account_expires=$(echo "$expiry_output" | grep "Account expires" | awk -F": " '{print $2}')
+
+# Convert date strings to timestamps
+current_timestamp=$(date +%s)
+
+if [[ $last_changed != "never" ]]; then
+  last_changed_timestamp=$(date -d "$last_changed" +%s)
+else
+  last_changed_timestamp=0
+fi
+# DEBUG - last_changed_timestamp
+if [ $DEBUG -eq 1 ]; then echo "last_changed_timestamp: $last_changed_timestamp"; fi
+
+if [[ $expires != "never" ]]; then
+  expires_timestamp=$(date -d "$expires" +%s)
+else
+  expires_timestamp=0
+fi
+# DEBUG - expires_timestamp
+if [ $DEBUG -eq 1 ]; then echo "expires_timestamp: $expires_timestamp"; fi
+
+# Calculate the difference in days
+if [[ $last_changed_timestamp != 0 ]]; then
+  days_since_last_changed=$(( (current_timestamp - last_changed_timestamp) / 86400 ))
+else
+  days_since_last_changed=0
+fi
+# DEBUG - days_since_last_changed
+if [ $DEBUG -eq 1 ]; then echo "days_since_last_changed: $days_since_last_changed"; fi
+
+if [[ $expires_timestamp != 0 ]]; then
+  days_until_expires=$(( (expires_timestamp - current_timestamp) / 86400 ))
+else
+  days_until_expires=0
+fi
+# DEBUG - days_until_expires
+if [ $DEBUG -eq 1 ]; then echo "days_until_expires: $days_until_expires"; fi
+
+# Notify messages
+msg_passwd_old="User '$USER' password was changed more than $days_since_last_changed days ago!"
+msg_passwd_remain="$days_until_expires days remain until the '$USER' password expires on $expires"
+
+# Conditional checks and notifications
+if [[ $expires != "never" && $days_until_expires -lt $CRITICAL ]]; then
+    STATUS="CRITICAL: $msg_passwd_remain"
+    EXIT_CODE=2
+elif [[ $expires != "never" && $days_until_expires -lt $WARNING ]]; then
+    STATUS="WARNING: $msg_passwd_remain"
+    EXIT_CODE=1
+elif [[ $last_changed == "never" || $days_since_last_changed -gt $PASS_MAX_AGE ]]; then
+    STATUS="WARNING: $msg_passwd_old"
+    EXIT_CODE=1
+else
+    STATUS="OK: '$USER' user password not near expiry!"
+    EXIT_CODE=0
+fi
+
+# Output Monitor messages
+echo $STATUS
+exit $EXIT_CODE
