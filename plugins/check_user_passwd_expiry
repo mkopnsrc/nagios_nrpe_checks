@@ -1,7 +1,7 @@
 #!/bin/bash
 
 : <<'#HEADER_COMMENTS'
-ScriptName: check_postfix_queue
+ScriptName: check_user_passwd_expiry
 Created: 2010-07-14
 Updated: 2010-07-19
 Version: 20100719
