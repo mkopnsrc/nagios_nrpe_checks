@@ -1,0 +1,48 @@
+#!/bin/sh
+
+# NRPE Check for Dell PowerEdge PSU Redundancy and Balance
+# Author: mkopnsrc
+# Date: 2024-11-02
+# Description:
+#   This script checks the dell poweredge PSU redundancy by parsing output from the `racadm get System.Power.RedundancyPolicy` command.
+#
+
+#Set DEBUG variable to 1, if you want to enable debugging, otherwise keep it set to 0
+DEBUG=0
+
+DELL_TOOLS_PATH="/opt/dell/srvadmin/sbin"
+
+# Check command racadm
+if ! command -v $DELL_TOOLS_PATH/racadm > /dev/null 2>&1; then
+  echo "Error: racadm command not found, Ensure package 'srvadmin-idracadm7' is installed!." >&2
+  exit 1
+fi
+
+# Expected results is 'A/B Grid Redundant' OR 'Not Redundant'
+REDUNDANCY_OUTPUT=$(sudo $DELL_TOOLS_PATH/racadm get System.Power.RedundancyPolicy)
+
+# Expected results is 'Enabled' OR 'Disabled'
+HOTSPARE_OUTPUT=$(sudo $DELL_TOOLS_PATH/racadm get System.Power.HotSpare.Enable)
+
+# Strip OUTPUT if it contains following:
+# \011 HT    '\t' (horizontal tab)
+# \012 LF    '\n' (new line)
+# \013 VT    '\v' (vertical tab)
+# \014 FF    '\f' (form feed)
+# \015 CR    '\r' (carriage ret)
+REDUNDANCY_OUTPUT=$(echo "$REDUNDANCY_OUTPUT" | tr -d '\011\012\013\014\015')
+HOTSPARE_OUTPUT=$(echo "$HOTSPARE_OUTPUT" | tr -d '\011\012\013\014\015')
+
+# Check PSU Redundancy
+if [[ "$REDUNDANCY_OUTPUT" != "A/B Grid Redundant" ]]; then
+    echo "CRITICAL: PSU A/B are not redundant!"
+    exit 2
+fi
+# Check PSU HotSpare
+if [[ "$HOTSPARE_OUTPUT" != "Disabled" ]]; then
+    echo "WARNING: PSU Hot Spare is Enabled, It should be Disabled."
+    exit 1
+fi
+
+# If all checks pass
+echo "OK: PSU ${REDUNDANCY_OUTPUT} and HotSpare is ${HOTSPARE_OUTPUT}"
