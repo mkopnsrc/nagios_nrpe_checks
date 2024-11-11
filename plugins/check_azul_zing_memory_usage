@@ -1,0 +1,123 @@
+#!/bin/bash
+
+# NRPE Check for Azul Zing Memory Usage
+# Author: mkopnsrc
+# Date: 2024-11-02
+# Description:
+#   This script checks the Zing memory usage by parsing output from the `zing-ps` command.
+#   It captures memory usage values for 'Used', 'Free', and 'Total' in the 'Zing' and 'Reservable' columns.
+#   The script evaluates the extracted values against defined warning and critical thresholds.
+#
+
+#Set DEBUG variable to 1, if you want to enable debugging, otherwise keep it set to 0
+DEBUG=0
+
+# Function to display usage information
+usage() {
+  echo "Usage: $0 -w <warning_percent_int> -c <critical_percent_int>"
+  exit 1
+}
+
+# Check if the correct number of arguments is provided
+if [ $# -ne 4 ]; then
+  usage
+fi
+
+# Parse script arguments
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -w)
+      WARNING=$2
+      shift 2
+      ;;
+    -c)
+      CRITICAL=$2
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+# CMD VARS
+CMD_ZING_PS="/usr/bin/zing-ps"
+CMD_BC="/usr/bin/bc"
+
+# Check command zing-ps
+if ! command -v $CMD_ZING_PS > /dev/null 2>&1; then
+  echo "CRITICAL: zing-ps command not found."
+  exit 2
+fi
+
+# Check command bc
+if ! command -v $CMD_BC > /dev/null 2>&1; then
+  echo "CRITICAL: bc command not found."
+  echo 2
+fi
+
+# Run zing-ps and capture output
+OUTPUT=$(zing-ps -d -s -c)
+
+# Set warning and critical thresholds for Zing Reservable Used memory (in percent int)
+ZING_RESERV_USED_WARN_PER=$WARNING
+ZING_RESERV_USED_CRIT_PER=$CRITICAL
+
+# Extract table lines from output
+TABLE=$(echo "$OUTPUT" | awk '/Memory Usage Summary/{flag=1;next}/Found/{flag=0}flag')
+
+# Parse values from each row of the table
+PHYSICAL_TOTAL_MB=$(echo "$TABLE" | awk '/Total:/ {print $2}')
+PHYSICAL_USED_MB=$(echo "$TABLE" | awk '/Used:/ {print $2}')
+LINUX_USED_MB=$(echo "$TABLE" | awk '/Used:/ {print $3}')
+ZING_TOTAL_MB=$(echo "$TABLE" | awk '/Total:/ {print $4}')
+ZING_USED_MB=$(echo "$TABLE" | awk '/Used:/ {print $4}')
+RESERVABLE_TOTAL_MB=$(echo "$TABLE" | awk '/Total:/ {print $5}')
+RESERVABLE_USED_MB=$(echo "$TABLE" | awk '/Used:/ {print $5}')
+RESERVABLE_FREE_MB=$(echo "$TABLE" | awk '/Free:/ {print $5}')
+
+# Check if values were successfully extracted
+if [ -z "$ZING_USED_MB" ] && [ -z "$RESERVABLE_TOTAL_MB" ] && [ -z "$RESERVABLE_USED_MB" ] && [ -z "$RESERVABLE_FREE_MB" ]; then
+    echo "UNKNOWN: Could not retrieve Zing or Reservable memory values."
+    exit 3
+fi
+
+# Convert values to integers (in MB)
+ZING_TOTAL_MB=${ZING_TOTAL_MB//[^0-9]/}
+ZING_USED_MB=${ZING_USED_MB//[^0-9]/}
+RESERVABLE_TOTAL_MB=${RESERVABLE_TOTAL_MB//[^0-9]/}
+RESERVABLE_USED_MB=${RESERVABLE_USED_MB//[^0-9]/}
+RESERVABLE_FREE_MB=${RESERVABLE_FREE_MB//[^0-9]/}
+
+# Convert MB to GB
+ZING_TOTAL_GB=$(echo "${ZING_TOTAL_MB} / 1024" | bc )
+RESERVABLE_TOTAL_GB=$(echo "scale=0; ${RESERVABLE_TOTAL_MB} / 1024" | bc -l)
+RESERVABLE_USED_GB=$(echo "scale=2; ${RESERVABLE_USED_MB} / 1024" | bc -l)
+RESERVABLE_FREE_GB=$(echo "scale=2; ${RESERVABLE_FREE_MB} / 1024" | bc -l)
+RESERVABLE_USED_PER=$(echo "scale=2; 100 / ${RESERVABLE_TOTAL_MB} * ${RESERVABLE_USED_MB}" | bc -l)
+
+# Calculate percentage of RESERVABLE_TOTAL for WARNING and CRITICAL size to MB
+ZING_RESERV_WARN_MB=$(echo "${RESERVABLE_TOTAL_MB} * ${ZING_RESERV_USED_WARN_PER} / 100" | bc)
+ZING_RESERV_CRIT_MB=$(echo "${RESERVABLE_TOTAL_MB} * ${ZING_RESERV_USED_WARN_PER} / 100" | bc)
+
+## Check Zing Used memory against thresholds
+#if (( ZING_USED >= ZING_USED_CRITICAL )); then
+#    echo "CRITICAL: Zing memory used is ${ZING_USED} MB | zing_used=${ZING_USED}MB"
+#    exit 2
+#elif (( ZING_USED >= ZING_USED_WARNING )); then
+#    echo "WARNING: Zing memory used is ${ZING_USED} MB | zing_used=${ZING_USED}MB"
+#    exit 1
+#fi
+
+# Check Reservable Free memory against thresholds
+if (( RESERVABLE_USED_MB >= ZING_RESERV_CRIT_MB )); then
+    echo "CRITICAL: Zing Reservable memory usage over ${ZING_RESERV_USED_CRIT_PER}% | usage=${RESERVABLE_USED_GB}GB,free=${RESERVABLE_FREE_GB}GB,total=${RESERVABLE_TOTAL_GB}GB"
+    exit 2
+elif (( RESERVABLE_USED_MB >= ZING_RESERV_WARN_MB )); then
+    echo "WARNING: Zing Reservable memory usage over ${ZING_RESERV_USED_WARN_PER}% | usage=${RESERVABLE_USED_GB}GB,free=${RESERVABLE_FREE_GB}GB,total=${RESERVABLE_TOTAL_GB}GB"
+    exit 1
+fi
+
+# If all checks pass
+echo "OK: Zing Reservable memory usage is ${RESERVABLE_USED_PER}% | usage=${RESERVABLE_USED_GB}GB,free=${RESERVABLE_FREE_GB}GB,total=${RESERVABLE_TOTAL_GB}GB"
+exit 0
