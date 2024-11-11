@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# NRPE Check for Azul Zing Memory Usage
+# NRPE Check for Zing Memory Usage
 # Author: mkopnsrc
 # Date: 2024-11-02
 # Description:
@@ -40,18 +40,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# CMD VARS
-CMD_ZING_PS="/usr/bin/zing-ps"
-CMD_BC="/usr/bin/bc"
-
 # Check command zing-ps
-if ! command -v $CMD_ZING_PS > /dev/null 2>&1; then
+if ! command -v zing-ps > /dev/null 2>&1; then
   echo "CRITICAL: zing-ps command not found."
   exit 2
 fi
 
 # Check command bc
-if ! command -v $CMD_BC > /dev/null 2>&1; then
+if ! command -v bc > /dev/null 2>&1; then
   echo "CRITICAL: bc command not found."
   echo 2
 fi
